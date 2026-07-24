@@ -1,0 +1,74 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      # Works around a known npm bug (npm/cli#4828) where npm sometimes
+      # skips installing Rollup's platform-specific native binary on a
+      # fresh install, which makes `vite build` fail deep inside Rollup's
+      # own module loading. Checks whether it's actually present and
+      # force-installs it only if it's missing — a no-op on a healthy
+      # install.
+      - name: Ensure Rollup native binary is present
+        run: |
+          if [ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]; then
+            echo "Rollup native binary missing — installing it explicitly"
+            npm install @rollup/rollup-linux-x64-gnu@4 --no-save --legacy-peer-deps
+          else
+            echo "Rollup native binary already present"
+          fi
+
+      - name: Build
+        # vite.config.ts uses a relative base ('./') so no GITHUB_PAGES_BASE
+        # / repo-name env var is needed — this app has no external data
+        # sync, so the build needs no secrets at all.
+        run: npm run build
+
+      # Copy index.html as 404.html so GitHub Pages serves the SPA on any direct URL
+      - name: Add 404.html for SPA routing
+        run: cp dist/index.html dist/404.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
