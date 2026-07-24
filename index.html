@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- PWA / install metadata -->
+    <meta name="theme-color" content="#1A1A2E" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ESLmaster101" />
+    <meta name="application-name" content="ESLmaster101" />
+    <meta name="description" content="ESLmaster101 – Level up your English with flashcards, quizzes, matching games and more." />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="ESLmaster101 – Learn English" />
+    <meta property="og:description" content="Level up your English with ESLmaster101 – the fun vocabulary app." />
+    <meta property="og:image" content="./icons/icon-512.png" />
+    <meta property="og:type" content="website" />
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+
+    <!-- Favicon & Icons -->
+    <link rel="icon" type="image/x-icon" href="./favicon.ico" />
+    <link rel="icon" type="image/png" sizes="48x48" href="./favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="./icons/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
+
+    <title>ESLmaster101 – Learn English</title>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!--
+      Root-cause-agnostic blank-screen safety net.
+      This runs as plain inline JS, completely independent of the React
+      bundle — so it still works even if the main script 404s, throws during
+      module evaluation, or never finishes loading for any reason. Without
+      this, ANY such failure is silent and indistinguishable from the page
+      just being slow: no error, no visible sign anything is wrong, just
+      white forever. This gives the person a visible, actionable way out
+      instead of a dead end, no matter what actually broke.
+    -->
+    <script>
+      (function () {
+        // ── Auto-recovery for the #1 known cause of a stuck boot ────────────
+        // A stale service worker / cached shell can reference a hashed JS
+        // filename from a PREVIOUS deploy that no longer exists on the
+        // server (every deploy replaces the whole dist/ folder with new
+        // hashes). That request 404s, the module never executes, root stays
+        // empty forever, and — critically — nothing throws INSIDE React, so
+        // the ErrorBoundary can't catch it either. Previously the only
+        // recovery was the human tapping "Clear cache & reload" after
+        // watching a 6-second wait. Since a failed script/stylesheet load is
+        // unambiguous (there's no scenario where waiting longer helps), we
+        // detect it directly via the window 'error' event (capture phase —
+        // resource load errors don't bubble) and recover immediately
+        // instead of waiting for the timeout at all.
+        var RELOAD_GUARD_KEY = 'esl_boot_auto_recovered';
+        function clearCachesAndReload() {
+          if (sessionStorage.getItem(RELOAD_GUARD_KEY) === '1') return false; // one automatic attempt per tab session, never loop
+          sessionStorage.setItem(RELOAD_GUARD_KEY, '1');
+          var done = function () { window.location.reload(); };
+          try {
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations()
+                .then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); })
+                .then(function () { return caches && caches.keys ? caches.keys() : []; })
+                .then(function (keys) { return Promise.all(keys.map(function (k) { return caches.delete(k); })); })
+                .then(done).catch(done);
+            } else {
+              done();
+            }
+          } catch (e) { done(); }
+          return true;
+        }
+
+        window.addEventListener('error', function (e) {
+          var t = e && e.target;
+          if (!t || t === window) return; // only care about resource-load errors, not JS runtime errors inside the app
+          var tag = t.tagName;
+          if (tag === 'SCRIPT' || tag === 'LINK') {
+            clearCachesAndReload();
+          }
+        }, true);
+
+        // Same root cause, different moment: a lazy-loaded page chunk
+        // (Flashcards, Quiz, Matching, …) failing to fetch AFTER the app has
+        // already mounted, because the SW/browser cache still references a
+        // filename from a previous deploy. This rejects the dynamic
+        // import() promise rather than firing a resource 'error' event, so
+        // it needs its own listener.
+        window.addEventListener('unhandledrejection', function (e) {
+          var msg = e && e.reason && (e.reason.message || String(e.reason));
+          if (msg && /dynamically imported module|Importing a module script failed|Failed to fetch/i.test(msg)) {
+            clearCachesAndReload();
+          }
+        });
+
+        var SHOW_AFTER_MS = 6000;
+        var timer = setTimeout(function () {
+          var root = document.getElementById('root');
+          // If React ever mounted anything, #root has children — don't show.
+          if (root && root.children.length > 0) return;
+
+          // Nothing rendered after 6s and no specific resource-load error or
+          // rejected dynamic import was caught above (those already trigger
+          // an immediate recovery on their own). This is the catch-all: any
+          // OTHER cause of a hung boot — a stale/broken cached service
+          // worker response, a script that loaded but silently hung, etc —
+          // still deserves the SAME one-shot automatic recovery attempt
+          // rather than making the person figure out and tap the button
+          // themselves. The sessionStorage guard inside
+          // clearCachesAndReload() already caps this to once per tab
+          // session, so this can't loop.
+          if (clearCachesAndReload()) return;
+
+          var overlay = document.createElement('div');
+          overlay.setAttribute('id', 'esl-boot-fallback');
+          overlay.style.cssText = 'position:fixed;inset:0;background:#1A1A2E;color:#fff;' +
+            'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+            'padding:24px;text-align:center;font-family:system-ui,-apple-system,sans-serif;z-index:99999;';
+          overlay.innerHTML =
+            '<div style="font-size:40px;margin-bottom:12px;">⏳</div>' +
+            '<h1 style="font-size:20px;font-weight:800;margin-bottom:8px;">Still loading…</h1>' +
+            '<p style="opacity:.75;margin-bottom:20px;max-width:420px;">' +
+            'This is taking longer than expected. This usually means an old cached ' +
+            'version got stuck. Tap below to clear it and reload — your saved words ' +
+            'and login are not affected, they live in this browser separately.</p>' +
+            '<button id="esl-boot-fix-btn" style="background:#00B4D8;color:#fff;font-weight:700;' +
+            'border:none;border-radius:12px;padding:12px 24px;cursor:pointer;font-size:14px;">' +
+            'Clear cache &amp; reload</button>' +
+            '<p style="opacity:.5;font-size:12px;margin-top:14px;max-width:380px;">' +
+            'Still stuck after this? Open your browser\'s site settings and clear data for ' +
+            'this site manually, then visit the link again.</p>';
+          document.body.appendChild(overlay);
+
+          document.getElementById('esl-boot-fix-btn').addEventListener('click', function () {
+            // A manual tap is an explicit user action — always honor it,
+            // even if an automatic recovery attempt already happened once
+            // this session (that guard exists only to stop an infinite
+            // *automatic* reload loop, not to block the person themselves).
+            sessionStorage.removeItem(RELOAD_GUARD_KEY);
+            clearCachesAndReload();
+          });
+        }, SHOW_AFTER_MS);
+
+        // If the app does mount, cancel the timer so the overlay never
+        // flashes on a normal, just-slightly-slow load.
+        var observer = new MutationObserver(function () {
+          var root = document.getElementById('root');
+          if (root && root.children.length > 0) {
+            clearTimeout(timer);
+            observer.disconnect();
+          }
+        });
+        observer.observe(document.getElementById('root'), { childList: true });
+      })();
+    </script>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
