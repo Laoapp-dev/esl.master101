@@ -47,6 +47,7 @@ export function Flashcards() {
   const [queue, setQueue]                 = useState<VocabularyWord[]>([]);
   const [showSetup, setShowSetup]         = useState(true);
   const [direction, setDirection]         = useState<'left'|'right'|null>(null);
+  const [sessionStartTime, setSessionStartTime] = useState(0);
 
   // The filter set by Favorites / Level Journey / Categories is meant for
   // this one visit only. Clear it on unmount so navigating away and later
@@ -90,6 +91,7 @@ export function Flashcards() {
     setSessionStats({ mastered:0, review:0 });
     setDirection(null);
     setShowSetup(false);
+    setSessionStartTime(Date.now());
     isAdvancingRef.current = false;
   };
 
@@ -118,10 +120,10 @@ export function Flashcards() {
       correctCount: w.correctCount + (learned ? 1 : 0),
       lastStudied:  new Date().toISOString(),
     });
-    setSessionStats(p => learned
-      ? { ...p, mastered: p.mastered + 1 }
-      : { ...p, review: p.review + 1 }
-    );
+    const updatedStats = learned
+      ? { mastered: sessionStats.mastered + 1, review: sessionStats.review }
+      : { mastered: sessionStats.mastered, review: sessionStats.review + 1 };
+    setSessionStats(updatedStats);
     if (currentIndex < queue.length - 1) {
       setIsFlipped(false);
       setTimeout(() => {
@@ -132,8 +134,24 @@ export function Flashcards() {
     } else {
       setSessionComplete(true);
       isAdvancingRef.current = false;
+      // Record this study session so it counts toward the learner's daily
+      // streak and shows up in Dashboard stats (total sessions, study time,
+      // weekly activity chart). Quiz, Matching, and Spelling already did
+      // this — Flashcards never did, so finishing a flashcard session
+      // silently vanished from progress tracking even though each card's
+      // own studyCount/isLearned was still saved correctly underneath.
+      const duration = Math.max(1, Math.floor((Date.now() - sessionStartTime) / 1000));
+      vocabulary.addSession({
+        date: new Date().toISOString(),
+        mode: 'flashcards',
+        wordsStudied: queue.length,
+        correctAnswers: updatedStats.mastered,
+        totalQuestions: queue.length,
+        duration,
+        cefrLevel: selectedLevel === 'all' ? 'A2' : selectedLevel,
+      });
     }
-  }, [queue, currentIndex, vocabulary]);
+  }, [queue, currentIndex, vocabulary, sessionStats, sessionStartTime, selectedLevel]);
 
   // Keyboard shortcuts
   useEffect(() => {

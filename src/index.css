@@ -375,6 +375,16 @@ button, a, [role="button"] {
 @media (max-width: 768px) {
   button, a { min-height: 44px; }
 }
+/* iOS Safari zooms the whole page in when a focused input/select/textarea
+   has an effective font-size under 16px. Several forms in this app (login,
+   search, spelling quiz, settings) use a 14px (text-sm) label size that
+   looks fine but triggers that zoom on focus on iPhone. Forcing 16px here
+   for all native form fields on small screens stops the zoom without
+   touching each component's visual size (this only affects mobile widths;
+   desktop keeps whatever size each component already sets). */
+@media (max-width: 768px) {
+  input, select, textarea { font-size: 16px !important; }
+}
 .mobile-nav-safe { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
 .main-content-mobile-pad { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
 
