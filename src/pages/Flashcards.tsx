@@ -1,14 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Volume2, ArrowLeft, ArrowRight, Bookmark,
-  Tag, BarChart2, RefreshCw, Lock,
+  Tag, BarChart2, RefreshCw, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { useApp } from '@/App';
 import { useNavigate } from 'react-router-dom';
 import { useSpeech } from '@/hooks/useSpeech';
 import type { VocabularyWord, CEFRLevel } from '@/types/vocabulary';
-import { CEFR_ORDER, UNLOCK_PCT, getMasteryPct, isLevelUnlocked, getPretestLevel } from '@/lib/levelLock';
+import { getMasteryPct } from '@/lib/levelLock';
 import { POS_COLORS, CEFR_STYLE, DiffDots, StarButton } from '@/components/FlashcardVisuals';
 
 // Visual tokens (POS_COLORS, CEFR_STYLE, DIFF_STYLE, DiffDots, StarButton)
@@ -23,9 +23,6 @@ export function Flashcards() {
   const { vocabulary, addToast } = useApp();
   const { speak } = useSpeech();
   const navigate = useNavigate();
-
-  // Read the current user's pretest level (shared helper — see src/lib/levelLock.ts)
-  const pretestLevel: string | undefined = getPretestLevel();
 
   // Session filter set by Favorites / LevelJourney / Categories pages.
   // NOTE: this used to be parsed as JSON (`JSON.parse(ssFilter)`), but
@@ -61,29 +58,45 @@ export function Flashcards() {
     };
   }, []);
 
-  // Words for the current level selection (respects session filter)
-  const levelWords: VocabularyWord[] = ssFilter === 'favorites'
-    ? vocabulary.words.filter(w => w.isStarred)
-    : ssFilter === 'category'
-    ? vocabulary.words.filter(w => w.category === ssCategory && (!ssLevel || w.cefrLevel === ssLevel))
-    : ssFilter === 'level' && ssLevel
-    ? vocabulary.words.filter(w => w.cefrLevel === ssLevel)
-    : selectedLevel === 'all'
-    ? vocabulary.words
-    : vocabulary.words.filter(w => w.cefrLevel === selectedLevel);
+  // Words for the current level selection (respects session filter).
+  // Memoized: vocabulary.words can be 9,000+ entries, and re-filtering the
+  // whole array on every render (every flip, every tick) was extra work the
+  // page didn't need — this only recomputes when the word list or filter
+  // actually changes.
+  const levelWords: VocabularyWord[] = useMemo(() => (
+    ssFilter === 'favorites'
+      ? vocabulary.words.filter(w => w.isStarred)
+      : ssFilter === 'category'
+      ? vocabulary.words.filter(w => w.category === ssCategory && (!ssLevel || w.cefrLevel === ssLevel))
+      : ssFilter === 'level' && ssLevel
+      ? vocabulary.words.filter(w => w.cefrLevel === ssLevel)
+      : selectedLevel === 'all'
+      ? vocabulary.words
+      : vocabulary.words.filter(w => w.cefrLevel === selectedLevel)
+  ), [vocabulary.words, ssFilter, ssCategory, ssLevel, selectedLevel]);
+
+  // O(1) id → word lookup for the live-state read below (was a .find() scan
+  // over the full word list on every single render — cheap in isolation but
+  // adds up with flip/advance animations firing constantly during a session).
+  const wordById = useMemo(() => {
+    const m = new Map<string, VocabularyWord>();
+    for (const w of vocabulary.words) m.set(w.id, w);
+    return m;
+  }, [vocabulary.words]);
 
   const startSession = () => {
     const filtered = levelWords.filter(w => !w.isLearned);
     if (filtered.length === 0) { addToast('No words to study! All words are learned.', 'info'); return; }
-    // Sort by level order (A1 first), then alphabetically — NO random shuffle by default
-    const sorted = [...filtered].sort((a, b) => {
-      const li = CEFR_ORDER.indexOf(a.cefrLevel) - CEFR_ORDER.indexOf(b.cefrLevel);
-      if (li !== 0) return li;
-      return a.word.localeCompare(b.word);
-    });
-    const list = vocabulary.settings.shuffleCards
-      ? [...sorted].sort(() => Math.random() - 0.5)
-      : sorted;
+    // Always shuffle so a session mixes words across categories and CEFR
+    // levels rather than marching straight through A1 → C2 in alphabetical
+    // order. Fisher–Yates gives a properly uniform shuffle (the old
+    // `.sort(() => Math.random() - 0.5)` trick is a well-known biased
+    // shuffle that skews toward certain orderings).
+    const list = [...filtered];
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
     setQueue(list);
     setCurrentIndex(0);
     setIsFlipped(false);
@@ -97,16 +110,23 @@ export function Flashcards() {
 
   const handleFlip = useCallback(() => setIsFlipped(p => !p), []);
 
-  // Guards against double-advancing: handleNext schedules a 220ms timeout
-  // before moving to the next card. If the user presses the arrow key or
-  // clicks again inside that window (very easy to do while practicing
-  // quickly), handleNext used to re-run against the same stale
-  // `currentIndex`, queuing a second advance for a card that was only
-  // studied once. That could push currentIndex past the end of the queue,
-  // at which point `queue[currentIndex]` is undefined, `w.id` throws, and
-  // the screen freezes/blanks with no way to continue. This ref makes
-  // handleNext a no-op while a transition is already in flight.
+  // Guards against double-advancing: without this, a fast double-tap (very
+  // easy while practicing quickly, especially on a touchscreen) could fire
+  // handleNext twice for the same card before state caught up, pushing
+  // currentIndex past the end of the queue and leaving the screen blank.
+  //
+  // This USED TO unlock itself via a 220ms setTimeout. That's what caused
+  // the "flashcard freezes / pauses by itself" reports: mobile browsers
+  // throttle timers in a backgrounded tab (switching apps, a notification,
+  // the phone locking) to save battery, so that setTimeout could sit
+  // pending for seconds or minutes. Meanwhile isAdvancingRef stayed `true`
+  // the whole time, silently swallowing every tap/keypress with nothing on
+  // screen to explain why. Unlocking it here instead — tied to currentIndex
+  // actually changing — means it can never get stuck waiting on a timer.
   const isAdvancingRef = useRef(false);
+  useEffect(() => {
+    isAdvancingRef.current = false;
+  }, [currentIndex, sessionComplete]);
 
   const handleNext = useCallback((learned: boolean) => {
     if (isAdvancingRef.current) return;
@@ -124,16 +144,15 @@ export function Flashcards() {
       ? { mastered: sessionStats.mastered + 1, review: sessionStats.review }
       : { mastered: sessionStats.mastered, review: sessionStats.review + 1 };
     setSessionStats(updatedStats);
+    setIsFlipped(false);
     if (currentIndex < queue.length - 1) {
-      setIsFlipped(false);
-      setTimeout(() => {
-        setCurrentIndex(p => p + 1);
-        setDirection(null);
-        isAdvancingRef.current = false;
-      }, 220);
+      // Advance immediately — the card-flip/slide animation is handled by
+      // Framer Motion reacting to the key/state change below, not by an
+      // artificial delay blocking input. This is what makes the deck feel
+      // instant instead of laggy.
+      setCurrentIndex(p => p + 1);
     } else {
       setSessionComplete(true);
-      isAdvancingRef.current = false;
       // Record this study session so it counts toward the learner's daily
       // streak and shows up in Dashboard stats (total sessions, study time,
       // weekly activity chart). Quiz, Matching, and Spelling already did
@@ -153,6 +172,24 @@ export function Flashcards() {
     }
   }, [queue, currentIndex, vocabulary, sessionStats, sessionStartTime, selectedLevel]);
 
+  // Pure navigation — move between cards without grading them "learned" or
+  // "still learning". Lets a learner browse back over what they just saw,
+  // or skip ahead, without that choice affecting their progress stats.
+  const goToCard = useCallback((delta: number) => {
+    const next = currentIndex + delta;
+    if (next < 0 || next >= queue.length) return;
+    setDirection(delta > 0 ? 'right' : 'left');
+    setIsFlipped(false);
+    setCurrentIndex(next);
+  }, [currentIndex, queue.length]);
+
+  // Clear the slide direction once the card has actually changed, so a
+  // later flip (front↔back) doesn't inherit a stale slide-in direction
+  // from the last Back/Next/Still-Learning/Got-It action.
+  useEffect(() => {
+    setDirection(null);
+  }, [currentIndex]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -164,14 +201,14 @@ export function Flashcards() {
         const w = queue[currentIndex];
         if (w) {
           vocabulary.toggleStar(w.id);
-          const live = vocabulary.words.find(x => x.id === w.id);
+          const live = wordById.get(w.id);
           addToast(!live?.isStarred ? '⭐ Added to Favorites' : 'Removed from Favorites', 'success');
         }
       }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [showSetup, sessionComplete, handleFlip, handleNext, queue, currentIndex, vocabulary, addToast]);
+  }, [showSetup, sessionComplete, handleFlip, handleNext, queue, currentIndex, vocabulary, addToast, wordById]);
 
   // ── Setup ────────────────────────────────────────────────────────────────────
   if (showSetup) {
@@ -185,7 +222,7 @@ export function Flashcards() {
             </div>
             <h2 className="text-xl font-semibold text-foreground">Flashcards</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {levelWords.filter(w => !w.isLearned).length} words ready · sorted A1 → C2
+              {levelWords.filter(w => !w.isLearned).length} words ready · shuffled across categories &amp; levels
             </p>
           </div>
 
@@ -194,21 +231,19 @@ export function Flashcards() {
             <label className="mb-2 block text-sm font-medium text-foreground">Select Level</label>
             <div className="grid grid-cols-4 gap-2">
               {(['all','A1','A2','B1','B2','C1','C2'] as const).map(level => {
-                const locked = level !== 'all' && !isLevelUnlocked(vocabulary.words, level as CEFRLevel, pretestLevel);
+                // All levels are unlocked in Flashcards — free study mode,
+                // unlike Quiz/Matching/Spelling which still gate levels by
+                // mastery. A learner can jump straight to any level here.
                 const mastery = level !== 'all' ? getMasteryPct(vocabulary.words, level as CEFRLevel) : null;
                 return (
-                  <button key={level} onClick={() => !locked && setSelectedLevel(level)}
-                    disabled={locked}
+                  <button key={level} onClick={() => setSelectedLevel(level)}
                     className={`relative rounded-xl py-2.5 text-sm font-semibold transition-colors ${
                       selectedLevel === level
                         ? 'bg-[#F5A623] text-white shadow-sm'
-                        : locked
-                        ? 'bg-muted/30 text-muted-foreground/40 cursor-not-allowed'
                         : 'bg-card border border-border text-muted-foreground hover:bg-muted/50'
                     }`}>
-                    {locked && <Lock className="absolute top-1.5 right-1.5 h-2.5 w-2.5 text-muted-foreground/40"/>}
                     <div>{level === 'all' ? 'All' : level}</div>
-                    {mastery !== null && !locked && mastery > 0 && (
+                    {mastery !== null && mastery > 0 && (
                       <div className={`text-[9px] mt-0.5 ${selectedLevel === level ? 'text-white/80' : 'text-muted-foreground'}`}>
                         {mastery}%
                       </div>
@@ -218,7 +253,7 @@ export function Flashcards() {
               })}
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              🔒 Levels unlock when previous level reaches {UNLOCK_PCT}% mastery
+              🔓 All levels unlocked · pick any level or study "All" for a mix of everything
             </p>
           </div>
         ) : (
@@ -285,7 +320,7 @@ export function Flashcards() {
   // ── Study card ────────────────────────────────────────────────────────────────
   // CRITICAL: always read the LIVE word from vocabulary.words so star/learned stays current
   const staleWord  = queue[currentIndex];
-  const word       = vocabulary.words.find(w => w.id === staleWord?.id) ?? staleWord;
+  const word       = (staleWord && wordById.get(staleWord.id)) ?? staleWord;
   if (!word) return null;
 
   const progress   = ((currentIndex + 1) / queue.length) * 100;
@@ -414,6 +449,21 @@ export function Flashcards() {
           )}
         </motion.div>
       </AnimatePresence>
+
+      {/* Browse navigation — move between cards without grading them.
+          Separate from Still Learning / Got It below, which grade the card
+          AND advance; these just move the cursor for reviewing/skipping. */}
+      <div className="flex justify-center items-center gap-3">
+        <button onClick={() => goToCard(-1)} disabled={currentIndex === 0}
+          className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent">
+          <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.5}/> Back
+        </button>
+        <span className="text-[11px] text-muted-foreground/50">·</span>
+        <button onClick={() => goToCard(1)} disabled={currentIndex === queue.length - 1}
+          className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent">
+          Next <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.5}/>
+        </button>
+      </div>
 
       {/* Controls */}
       <div className="flex justify-center gap-3">
