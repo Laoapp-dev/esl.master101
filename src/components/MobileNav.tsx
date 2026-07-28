@@ -184,6 +184,7 @@ export function MobileNav() {
                   <DrawerLink to="/study/quiz"       icon={HelpCircle} label="Quiz"       onNav={() => setDrawerOpen(false)} pathname={pathname} />
                   <DrawerLink to="/study/matching"   icon={Puzzle}     label="Matching"   onNav={() => setDrawerOpen(false)} pathname={pathname} />
                   <DrawerLink to="/study/spelling"   icon={Keyboard}   label="Spelling"   onNav={() => setDrawerOpen(false)} pathname={pathname} />
+                  <DrawerLink to="/speak-challenge"  icon={Mic}        label="Speak Challenge" onNav={() => setDrawerOpen(false)} pathname={pathname} accent />
                 </DrawerSection>
 
                 <DrawerSection label="Account">

@@ -81,6 +81,13 @@ export function Dashboard() {
       path: '/study/quiz',
       color: 'bg-blue-50 text-[#4A90E2]',
     },
+    {
+      title: 'Speak Challenge',
+      description: 'Listen, shadow & record pronunciation',
+      icon: Mic,
+      path: '/speak-challenge',
+      color: 'bg-indigo-50 text-[#4F39F6]',
+    },
   ];
 
   return (

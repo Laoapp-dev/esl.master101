@@ -30,6 +30,7 @@ const AdminPanel     = lazy(() => import('@/pages/AdminPanel').then(m => ({ defa
 const UserDashboard  = lazy(() => import('@/pages/UserDashboard').then(m => ({ default: m.UserDashboard })));
 const PreTest        = lazy(() => import('@/pages/PreTest').then(m => ({ default: m.PreTest })));
 const Practice       = lazy(() => import('@/pages/Practice').then(m => ({ default: m.Practice })));
+const SpeakChallenge  = lazy(() => import('@/pages/SpeakChallenge').then(m => ({ default: m.SpeakChallenge })));
 
 function PageLoading() {
   return (
@@ -109,6 +110,7 @@ function AppInner() {
                 <Route path="/profile"       element={<Profile />} />
                 <Route path="/my-account"    element={<UserDashboard />} />
                 <Route path="/practice"      element={<Practice />} />
+                <Route path="/speak-challenge" element={<SpeakChallenge />} />
                 {currentUser?.role === 'admin' && (
                   <Route path="/admin" element={<AdminPanel />} />
                 )}

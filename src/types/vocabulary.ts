@@ -27,7 +27,7 @@ export interface VocabularyWord {
 export interface StudySession {
   id: string;
   date: string;
-  mode: 'flashcards' | 'quiz' | 'matching' | 'spelling';
+  mode: 'flashcards' | 'quiz' | 'matching' | 'spelling' | 'speaking';
   wordsStudied: number;
   correctAnswers: number;
   totalQuestions: number;
@@ -83,7 +83,7 @@ export interface Achievement {
   threshold: number;
 }
 
-export type StudyMode = 'flashcards' | 'quiz' | 'matching' | 'spelling';
+export type StudyMode = 'flashcards' | 'quiz' | 'matching' | 'spelling' | 'speaking';
 export type QuizType = 'definition' | 'synonym' | 'antonym' | 'fillBlank';
 export type FilterLevel = 'all' | CEFRLevel;
 export type SortOption = 'recent' | 'alphabetical' | 'level' | 'studied';
