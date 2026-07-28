@@ -26,7 +26,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mic, Square, Upload, Volume2, ChevronLeft, ChevronRight,
   Repeat2, Trash2, AlertCircle, PartyPopper, RefreshCw, ArrowLeft,
-  Tags, Layers, Lock,
+  Tags, Layers, Lock, Loader2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/App';
@@ -50,7 +50,7 @@ const CEFR_BADGE: Record<string, string> = {
   A1: '#34D399', A2: '#4ADE80', B1: '#FBBF24', B2: '#FB923C', C1: '#F97316', C2: '#EF4444',
 };
 
-type RecordState = 'idle' | 'recording';
+type RecordState = 'idle' | 'requesting' | 'recording';
 
 export function SpeakChallenge() {
   const { vocabulary, addToast } = useApp();
@@ -122,6 +122,10 @@ export function SpeakChallenge() {
   };
 
   const finishChallenge = useCallback(() => {
+    shadowTokenRef.current += 1;
+    recordingTokenRef.current += 1;
+    hardStopRecording();
+    window.speechSynthesis?.cancel();
     const duration = Math.max(1, Math.floor((Date.now() - sessionStartTime) / 1000));
     vocabulary.addSession({
       date: new Date().toISOString(),
@@ -133,6 +137,9 @@ export function SpeakChallenge() {
       cefrLevel: selectedLevel === 'all' ? 'A2' : selectedLevel,
     });
     setSessionComplete(true);
+    // hardStopRecording/shadowTokenRef/recordingTokenRef are declared further down but
+    // are stable refs/callbacks — safe to close over since this is only invoked post-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue.length, sessionStartTime, vocabulary, selectedLevel]);
 
   const goToCard = useCallback((delta: number) => {
@@ -155,6 +162,31 @@ export function SpeakChallenge() {
   const timerRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Why the mic used to "start itself" ───────────────────────────────
+  // Shadow mode wires SpeechSynthesisUtterance.onend → startRecording().
+  // Problem: calling speechSynthesis.cancel() (which we do on every word
+  // change, on unmount, and which the shared useSpeech "Listen" button
+  // also does internally) fires that SAME onend/onerror callback for
+  // whatever utterance was still pending — not just a real "finished
+  // speaking" event. So navigating to the next word, or just clicking
+  // "Listen" while a Shadow utterance was queued, could silently arm the
+  // mic on its own.
+  //
+  // Fix: every Shadow call gets a unique token. The onend/onerror
+  // handlers only start recording if their token is still the "current"
+  // one. Anything that should invalidate a pending Shadow (new word,
+  // unmount, Listen, Shadow pressed again, manual stop) bumps the token
+  // first, so a stray cancel-triggered callback becomes a harmless no-op.
+  const shadowTokenRef = useRef(0);
+  const invalidateShadow = useCallback(() => { shadowTokenRef.current += 1; }, []);
+
+  // Separate token guarding the MediaRecorder's own async callbacks
+  // (ondataavailable/onstop), so a recorder left over from a word the
+  // learner already navigated away from can't apply its stale audio to
+  // whatever card is on screen now.
+  const recordingTokenRef = useRef(0);
+  const startingRef = useRef(false); // guards against double-start races (rapid taps before getUserMedia resolves)
+
   const resetAudio = useCallback(() => {
     setAudioUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
     setRecordedSeconds(0);
@@ -162,22 +194,35 @@ export function SpeakChallenge() {
     setMicError('');
   }, []);
 
+  const hardStopRecording = useCallback(() => {
+    recordingTokenRef.current += 1; // any in-flight recorder's callbacks become stale
+    startingRef.current = false;
+    if (mediaRef.current && mediaRef.current.state !== 'inactive') {
+      try { mediaRef.current.stop(); } catch { /* already stopped */ }
+    }
+    mediaRef.current = null;
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    if (timerRef.current) { window.clearInterval(timerRef.current); timerRef.current = null; }
+  }, []);
+
   // New word → clear any recording from the previous word, stop anything
   // still playing/recording so it can't bleed into the next card.
   useEffect(() => {
+    invalidateShadow();
+    hardStopRecording();
     resetAudio();
     setRecordState('idle');
-    if (mediaRef.current && mediaRef.current.state !== 'inactive') mediaRef.current.stop();
     window.speechSynthesis?.cancel();
-  }, [currentIndex, resetAudio]);
+  }, [currentIndex, invalidateShadow, hardStopRecording, resetAudio]);
 
   // Stop everything on unmount (leaving the page mid-recording shouldn't
   // leave the mic hot in the background).
   useEffect(() => () => {
-    if (mediaRef.current && mediaRef.current.state !== 'inactive') mediaRef.current.stop();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    if (timerRef.current) window.clearInterval(timerRef.current);
+    invalidateShadow();
+    hardStopRecording();
     window.speechSynthesis?.cancel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const markPracticed = useCallback((word: VocabularyWord) => {
@@ -191,45 +236,99 @@ export function SpeakChallenge() {
     });
   }, [vocabulary]);
 
+  // Codecs tried in order of preference; falls back to the browser's
+  // default (undefined mimeType) when none of these are supported —
+  // Safari/iOS in particular doesn't support audio/webm at all, which
+  // previously threw and was mis-reported as "permission denied".
+  const pickMimeType = (): string | undefined => {
+    if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return undefined;
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'];
+    return candidates.find(t => MediaRecorder.isTypeSupported(t));
+  };
+
   const startRecording = useCallback(async (word: VocabularyWord) => {
+    if (startingRef.current || recordState === 'recording') return; // ignore double-taps / overlapping triggers
+    startingRef.current = true;
+    invalidateShadow(); // a manual/real recording start supersedes any pending Shadow auto-start
     setMicError('');
     resetAudio();
+    setRecordState('requesting');
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setMicError('Recording isn’t supported in this browser. Try uploading an audio file instead.');
+      setRecordState('idle');
+      startingRef.current = false;
+      return;
+    }
+
+    const token = ++recordingTokenRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // If the learner navigated away / stopped while permission was pending, discard this stream.
+      if (token !== recordingTokenRef.current) {
+        stream.getTracks().forEach(t => t.stop());
+        startingRef.current = false;
+        return;
+      }
       streamRef.current = stream;
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
+      const mimeType = pickMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const usedMimeType = recorder.mimeType || mimeType || 'audio/webm';
       chunksRef.current = [];
       recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        setAudioUrl(URL.createObjectURL(blob));
         stream.getTracks().forEach(t => t.stop());
+        if (token !== recordingTokenRef.current) return; // stale recorder from a previous word — drop it
+        const blob = new Blob(chunksRef.current, { type: usedMimeType });
+        setAudioUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
         streamRef.current = null;
         if (timerRef.current) { window.clearInterval(timerRef.current); timerRef.current = null; }
         markPracticed(word);
+        setRecordState('idle');
+      };
+      recorder.onerror = () => {
+        if (token !== recordingTokenRef.current) return;
+        setMicError('Recording stopped unexpectedly. Please try again.');
+        setRecordState('idle');
       };
       recorder.start(250);
       mediaRef.current = recorder;
+      startingRef.current = false;
       setRecordState('recording');
       const startTime = Date.now();
       timerRef.current = window.setInterval(() => {
         setRecordedSeconds(Math.floor((Date.now() - startTime) / 1000));
       }, 250);
-    } catch {
-      setMicError('Microphone access denied. Allow microphone access, or upload an audio file instead.');
+    } catch (err) {
+      startingRef.current = false;
+      if (token !== recordingTokenRef.current) return;
+      const name = err instanceof Error ? err.name : '';
+      const message =
+        name === 'NotAllowedError' || name === 'PermissionDeniedError'
+          ? 'Microphone access denied. Allow microphone access in your browser settings, or upload an audio file instead.'
+          : name === 'NotFoundError' || name === 'DevicesNotFoundError'
+          ? 'No microphone found on this device. Try uploading an audio file instead.'
+          : name === 'NotReadableError'
+          ? 'Your microphone is busy or unavailable right now (another app may be using it).'
+          : 'Couldn’t start recording. Please try again, or upload an audio file instead.';
+      setMicError(message);
       setRecordState('idle');
     }
-  }, [resetAudio, markPracticed]);
+  }, [invalidateShadow, resetAudio, markPracticed, recordState]);
 
-  const stopRecording = () => {
-    if (mediaRef.current && mediaRef.current.state !== 'inactive') mediaRef.current.stop();
-    setRecordState('idle');
-  };
+  const stopRecording = useCallback(() => {
+    invalidateShadow();
+    if (mediaRef.current && mediaRef.current.state !== 'inactive') {
+      mediaRef.current.stop(); // onstop handles cleanup + setRecordState('idle')
+    } else {
+      setRecordState('idle');
+    }
+  }, [invalidateShadow]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, word: VocabularyWord) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    invalidateShadow();
     resetAudio();
     setAudioUrl(URL.createObjectURL(file));
     setFileName(file.name);
@@ -243,17 +342,29 @@ export function SpeakChallenge() {
   // recording the instant it finishes so the learner repeats it right
   // away. Uses the Web Speech API directly (rather than the shared
   // useSpeech hook) so we get a reliable onend callback to chain the
-  // recording start to — no guessing at timing.
+  // recording start to — no guessing at timing. Token-guarded (see notes
+  // above) so a cancelled/superseded utterance can never trigger it.
   const handleShadow = (word: VocabularyWord) => {
+    if (recordState === 'recording' || recordState === 'requesting') return;
+    invalidateShadow();
     resetAudio();
     if (!window.speechSynthesis) { startRecording(word); return; }
+    const token = ++shadowTokenRef.current;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(word.word);
     utterance.lang = 'en-US';
     utterance.rate = 0.85;
-    utterance.onend = () => startRecording(word);
-    utterance.onerror = () => startRecording(word);
+    utterance.onend = () => { if (shadowTokenRef.current === token) startRecording(word); };
+    utterance.onerror = () => { if (shadowTokenRef.current === token) startRecording(word); };
     window.speechSynthesis.speak(utterance);
+  };
+
+  // Wraps the plain "Listen" button: invalidates any pending Shadow token
+  // first so speak()'s internal speechSynthesis.cancel() can't trigger an
+  // unrelated auto-record.
+  const handleListen = (text: string) => {
+    invalidateShadow();
+    speak(text);
   };
 
   // ── Setup screen ───────────────────────────────────────────────────────
@@ -398,7 +509,7 @@ export function SpeakChallenge() {
       <div className="mx-auto max-w-lg space-y-5">
         {/* Top bar */}
         <div className="flex items-center justify-between">
-          <button onClick={() => setShowSetup(true)}
+          <button onClick={() => { invalidateShadow(); hardStopRecording(); window.speechSynthesis?.cancel(); setShowSetup(true); }}
             className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
             <ArrowLeft className="h-4 w-4" /> Exit
           </button>
@@ -429,7 +540,7 @@ export function SpeakChallenge() {
             </div>
 
             {/* Listen */}
-            <button onClick={() => speak(word.word)}
+            <button onClick={() => handleListen(word.word)}
               className="w-full flex items-center justify-center gap-2.5 rounded-2xl py-4 text-base font-bold bg-primary text-primary-foreground shadow-lg shadow-primary/25 transition-transform active:scale-[0.98]">
               <Volume2 className="h-5 w-5" strokeWidth={2} /> Listen Native Audio
             </button>
@@ -469,18 +580,25 @@ export function SpeakChallenge() {
 
             {/* Shadow + mic */}
             <div className="flex flex-col items-center gap-3 pt-1">
-              <button onClick={() => handleShadow(word)} disabled={recordState === 'recording'}
+              <button onClick={() => handleShadow(word)} disabled={recordState !== 'idle'}
                 className="flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold text-muted-foreground border border-border hover:bg-muted/50 transition-colors disabled:opacity-40">
                 <Repeat2 className="h-3.5 w-3.5" /> Shadow Practice (listen, then repeat)
               </button>
 
               <button
-                onClick={() => recordState === 'recording' ? stopRecording() : startRecording(word)}
-                className={`relative flex h-28 w-28 items-center justify-center rounded-full transition-transform active:scale-95 ${
+                onClick={() => {
+                  if (recordState === 'recording') stopRecording();
+                  else if (recordState === 'idle') startRecording(word);
+                  // 'requesting': ignore taps until the permission prompt resolves
+                }}
+                disabled={recordState === 'requesting'}
+                className={`relative flex h-28 w-28 items-center justify-center rounded-full transition-transform active:scale-95 disabled:cursor-wait ${
                   recordState === 'recording' ? 'bg-destructive shadow-[0_0_0_12px_hsl(var(--destructive)/0.15)]' : 'bg-primary shadow-[0_0_0_12px_hsl(var(--primary)/0.15)]'
                 }`}>
                 {recordState === 'recording'
                   ? <Square className="h-9 w-9 text-white" fill="white" strokeWidth={0} />
+                  : recordState === 'requesting'
+                  ? <Loader2 className="h-9 w-9 text-primary-foreground animate-spin" strokeWidth={1.5} />
                   : <Mic className="h-10 w-10 text-primary-foreground" strokeWidth={1.5} />}
                 {recordState === 'recording' && (
                   <motion.span className="absolute inset-0 rounded-full border-2 border-destructive"
@@ -490,7 +608,11 @@ export function SpeakChallenge() {
               </button>
 
               <p className="text-sm font-medium text-muted-foreground">
-                {recordState === 'recording' ? `Recording… ${recordedSeconds}s (tap to stop)` : 'Click Microphone & Speak Word Out Loud'}
+                {recordState === 'recording'
+                  ? `Recording… ${recordedSeconds}s (tap to stop)`
+                  : recordState === 'requesting'
+                  ? 'Requesting microphone access…'
+                  : 'Click Microphone & Speak Word Out Loud'}
               </p>
 
               {!audioUrl && recordState === 'idle' && (
