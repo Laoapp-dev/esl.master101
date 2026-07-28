@@ -27,6 +27,7 @@ const CEFR_LEVELS: CEFRLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 export function AddWordModal({ isOpen, onClose, editWord }: AddWordModalProps) {
   const { vocabulary, addToast } = useApp();
   const [word, setWord] = useState('');
+  const [pronunciation, setPronunciation] = useState('');
   const [partOfSpeech, setPartOfSpeech] = useState<PartOfSpeech>('noun');
   const [laoTranslation, setLaoTranslation] = useState('');
   const [thaiTranslation, setThaiTranslation] = useState('');
@@ -40,6 +41,7 @@ export function AddWordModal({ isOpen, onClose, editWord }: AddWordModalProps) {
   useEffect(() => {
     if (editWord) {
       setWord(editWord.word);
+      setPronunciation(editWord.pronunciation || '');
       setPartOfSpeech(editWord.partOfSpeech);
       setLaoTranslation(editWord.laoTranslation || '');
       setThaiTranslation(editWord.thaiTranslation || '');
@@ -56,6 +58,7 @@ export function AddWordModal({ isOpen, onClose, editWord }: AddWordModalProps) {
 
   const resetForm = () => {
     setWord('');
+    setPronunciation('');
     setPartOfSpeech('noun');
     setLaoTranslation('');
     setThaiTranslation('');
@@ -77,6 +80,7 @@ export function AddWordModal({ isOpen, onClose, editWord }: AddWordModalProps) {
 
     const wordData = {
       word: word.trim(),
+      pronunciation: pronunciation.trim() || undefined,
       partOfSpeech,
       laoTranslation: laoTranslation.trim() || undefined,
       thaiTranslation: thaiTranslation.trim() || undefined,
@@ -150,6 +154,20 @@ export function AddWordModal({ isOpen, onClose, editWord }: AddWordModalProps) {
                   className="w-full rounded-[10px] border border-[#E5E5DD] px-4 py-2.5 text-sm text-[#1A1A2E] placeholder:text-[#9B9BAE]"
                   placeholder="Enter the word"
                   required
+                />
+              </div>
+
+              {/* Pronunciation */}
+              <div>
+                <label className="mb-1.5 block text-[13px] font-medium text-[#1A1A2E]">
+                  Pronunciation
+                </label>
+                <input
+                  type="text"
+                  value={pronunciation}
+                  onChange={(e) => setPronunciation(e.target.value)}
+                  className="w-full rounded-[10px] border border-[#E5E5DD] px-4 py-2.5 text-sm text-[#1A1A2E] placeholder:text-[#9B9BAE]"
+                  placeholder="e.g. /wˈeɪv/"
                 />
               </div>
 

@@ -70,6 +70,9 @@ export function WordCard({ word, onEdit, onDelete, showTranslations = true }: Wo
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 flex-wrap min-w-0">
           <h3 className="text-base font-bold text-[#1A1A2E] dark:text-white">{word.word}</h3>
+          {word.pronunciation && (
+            <span className="text-xs font-medium text-[#9B9BAE] dark:text-white/50">{word.pronunciation}</span>
+          )}
           <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${POS_COLORS[word.partOfSpeech] ?? 'bg-gray-50 text-gray-700'}`}>
             {word.partOfSpeech}
           </span>

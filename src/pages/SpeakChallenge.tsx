@@ -537,6 +537,9 @@ export function SpeakChallenge() {
                 </span>
               </div>
               <h1 className="text-4xl sm:text-5xl font-black text-foreground tracking-tight break-words">{word.word}</h1>
+              {word.pronunciation && (
+                <p className="mt-1.5 text-base font-medium text-muted-foreground">{word.pronunciation}</p>
+              )}
             </div>
 
             {/* Listen */}

@@ -5,6 +5,7 @@ export type PartOfSpeech = 'noun' | 'verb' | 'adjective' | 'adverb' | 'pronoun' 
 export interface VocabularyWord {
   id: string;
   word: string;
+  pronunciation?: string;
   partOfSpeech: PartOfSpeech;
   laoTranslation?: string;
   thaiTranslation?: string;

@@ -359,7 +359,10 @@ export function Flashcards() {
                 <StarButton wordId={word.id} />
               </div>
 
-              <h3 className="text-4xl font-bold text-foreground text-center mb-4">{word.word}</h3>
+              <h3 className="text-4xl font-bold text-foreground text-center mb-1">{word.word}</h3>
+              {word.pronunciation && (
+                <p className="text-sm font-medium text-muted-foreground text-center mb-3">{word.pronunciation}</p>
+              )}
               <span className={`rounded-full px-3 py-1 text-[12px] font-semibold ${POS_COLORS[word.partOfSpeech] ?? 'bg-gray-50 text-gray-700'}`}>
                 {word.partOfSpeech}
               </span>
@@ -382,6 +385,9 @@ export function Flashcards() {
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-xl font-bold text-foreground">{word.word}</h3>
+                  {word.pronunciation && (
+                    <span className="text-xs font-medium text-muted-foreground">{word.pronunciation}</span>
+                  )}
                   <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${POS_COLORS[word.partOfSpeech] ?? 'bg-gray-50 text-gray-700'}`}>
                     {word.partOfSpeech}
                   </span>

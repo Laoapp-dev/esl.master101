@@ -66,6 +66,7 @@ function coerceWord(w: any): VocabularyWord {
   return {
     ...w,
     word: String(w.word),
+    pronunciation: typeof w.pronunciation === 'string' ? w.pronunciation : undefined,
     definition: typeof w.definition === 'string' ? w.definition : '',
     exampleSentence: typeof w.exampleSentence === 'string' ? w.exampleSentence : '',
     partOfSpeech: w.partOfSpeech || 'noun',
